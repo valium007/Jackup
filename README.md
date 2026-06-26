@@ -32,6 +32,9 @@ The default `config.yml`:
 # How often to run a backup, in seconds. (6 hours)
 backup-frequency: 21600
 
+# Delay before the first backup after the server starts, in seconds. (5 minutes)
+initial-delay: 300
+
 # Maximum number of backups to keep. Oldest are deleted once this is exceeded.
 max-backups: 4
 
@@ -42,29 +45,31 @@ compression-level: 10
 backup-path: backups
 
 # Worlds to back up. These are directory names relative to the server directory.
+# On modern Minecraft all dimensions live inside the main world folder, so
+# listing "world" backs up the nether and end too.
 worlds:
   - world
-  - world_nether
-  - world_the_end
 ```
 
 | Key                | Type     | Default                              | Description                                                                                  |
 | ------------------ | -------- | ------------------------------------ | -------------------------------------------------------------------------------------------- |
-| `backup-frequency` | int      | `21600`                              | Interval between backups, in seconds. The first backup runs at startup.                       |
+| `backup-frequency` | int      | `21600`                              | Interval between backups, in seconds.                                                          |
+| `initial-delay`    | int      | `300`                                | Seconds to wait after startup before the first backup, so it isn't taken mid-generation.      |
 | `max-backups`      | int      | `4`                                  | How many `.tar.zst` archives to keep. The oldest are pruned once this is exceeded.            |
 | `compression-level`| int      | `10`                                 | Zstd level, `1` (fastest) to `22` (smallest).                                                 |
 | `backup-path`      | string   | `backups`                            | Output folder. Relative to the **server directory**; an absolute path also works.            |
-| `worlds`           | list     | `world`, `world_nether`, `world_the_end` | World directory names to back up, relative to the server directory.                       |
+| `worlds`           | list     | `world`                              | World directory names to back up, relative to the server directory.                           |
 
 ## How it works
 
-On enable, Jackup loads the config, ensures the backup directory exists, and schedules a recurring asynchronous task. Each run:
+On enable, Jackup loads the config, ensures the backup directory exists, and schedules a recurring task that first runs after `initial-delay`. Each run:
 
-1. For every configured world, streams the directory into `<backup-path>/<world>_<timestamp>.tar.zst` (timestamp format `yyyy-MM-dd_HH-mm-ss`).
-2. Skips `session.lock` and any non-regular files.
-3. After archiving, deletes the oldest `.tar.zst` files until at most `max-backups` remain.
+1. On the main thread, **flushes every loaded world to disk and pauses auto-save**, so the snapshot is consistent.
+2. Hands off to an async task that streams each configured world directory into `<backup-path>/<world>_<timestamp>.tar.zst` (timestamp format `yyyy-MM-dd_HH-mm-ss`), skipping `session.lock` and non-regular files. Because modern Minecraft stores the nether and end inside the world folder (`dimensions/`), backing up `world` captures all dimensions.
+3. Deletes the oldest `.tar.zst` files until at most `max-backups` remain.
+4. Re-enables auto-save on the main thread.
 
-> **Note:** Backups run while the server is live. Skipping `session.lock` avoids the obvious conflict, but a world mid-save can still produce a slightly inconsistent snapshot. For mission-critical setups, consider pairing this with a save flush.
+> **Note:** Archiving still happens while the server is live, but flushing + pausing auto-save first means it reads a stable on-disk copy rather than half-written files.
 
 ## Building
 

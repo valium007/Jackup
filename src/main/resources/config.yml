@@ -1,6 +1,11 @@
 # How often to run a backup, in seconds. (6 hours)
 backup-frequency: 21600
 
+# Delay before the first backup after the server starts, in seconds. (5 minutes)
+# Gives the server time to finish generating/loading worlds so the first
+# backup isn't taken mid-startup.
+initial-delay: 300
+
 # Maximum number of backups to keep. Oldest are deleted once this is exceeded.
 max-backups: 4
 
@@ -11,7 +16,8 @@ compression-level: 10
 backup-path: backups
 
 # Worlds to back up. These are directory names relative to the server directory.
+# On modern Minecraft (1.21.x / 26.x) all dimensions (nether, end) live inside
+# the main world folder under dimensions/, so listing "world" backs up everything.
+# Add more entries only if you have additional separate world folders.
 worlds:
   - world
-  - world_nether
-  - world_the_end

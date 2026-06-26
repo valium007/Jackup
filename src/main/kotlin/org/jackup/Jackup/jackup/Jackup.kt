@@ -19,6 +19,7 @@ import kotlin.io.path.name
 class Jackup : JavaPlugin() {
 
     private var backupFrequency = 21600 // seconds
+    private var initialDelay = 300 // seconds before the first backup
     private var maxBackups = 4
     private var compressionLevel = 10 // zstd level (1-22)
     private lateinit var backupPath: String
@@ -49,6 +50,7 @@ class Jackup : JavaPlugin() {
 
     private fun loadConfig() {
         backupFrequency = config.getInt("backup-frequency", 3600)
+        initialDelay = config.getInt("initial-delay", 300)
         maxBackups = config.getInt("max-backups", 5)
         compressionLevel = config.getInt("compression-level", 10)
         backupPath = config.getString("backup-path", "backups")!!
@@ -56,34 +58,59 @@ class Jackup : JavaPlugin() {
     }
 
     private fun startBackup() {
-        // backupFrequency is in seconds; the scheduler counts ticks (20 per second).
-        backupTask = runAsyncTaskTimer(0L, backupFrequency * 20L) {
-            doBackup()
-        }
+        // Times are in seconds; the scheduler counts ticks (20 per second).
+        // The timer runs on the main thread so it can flush worlds safely; the
+        // actual archiving is handed off to an async task (see doBackup).
+        backupTask = object : BukkitRunnable() {
+            override fun run() {
+                doBackup()
+            }
+        }.runTaskTimer(this, initialDelay * 20L, backupFrequency * 20L)
     }
 
+    // Runs on the main thread.
     private fun doBackup() {
         logger.info("Starting backup process...")
 
-        for (worldName in worlds) {
-            val worldDir = Paths.get(worldName)
-            if (!worldDir.isDirectory()) {
-                logger.warning("World directory not found: $worldName")
-                continue
-            }
-
-            val timestamp = LocalDateTime.now().format(timestampFormat)
-            val archive = Paths.get(backupPath, "${worldName}_$timestamp.tar.zst")
-            try {
-                archiveDirectory(worldDir, archive)
-                logger.info("Backed up world: $worldName to $archive")
-            } catch (e: Exception) {
-                logger.severe("Failed to backup world: $worldName - ${e.message}")
-            }
+        // Flush all loaded worlds to disk and pause auto-save so the async copy
+        // sees a consistent on-disk snapshot. Without this, the archive can pick
+        // up half-written region/level files, producing a "corrupted" world.
+        val loadedWorlds = server.worlds
+        for (world in loadedWorlds) {
+            world.isAutoSave = false
+            world.save()
         }
 
-        cleanupOldBackups()
-        logger.info("Backup process completed.")
+        runAsyncTask {
+            try {
+                for (worldName in worlds) {
+                    val worldDir = Paths.get(worldName)
+                    if (!worldDir.isDirectory()) {
+                        logger.warning("World directory not found: $worldName")
+                        continue
+                    }
+
+                    val timestamp = LocalDateTime.now().format(timestampFormat)
+                    val archive = Paths.get(backupPath, "${worldName}_$timestamp.tar.zst")
+                    try {
+                        archiveDirectory(worldDir, archive)
+                        logger.info("Backed up world: $worldName to $archive")
+                    } catch (e: Exception) {
+                        logger.severe("Failed to backup world: $worldName - ${e.message}")
+                    }
+                }
+
+                cleanupOldBackups()
+            } finally {
+                // Re-enable auto-save back on the main thread, even if archiving failed.
+                runSyncTask {
+                    for (world in loadedWorlds) {
+                        world.isAutoSave = true
+                    }
+                }
+                logger.info("Backup process completed.")
+            }
+        }
     }
 
     private fun cleanupOldBackups() {
@@ -129,15 +156,19 @@ class Jackup : JavaPlugin() {
         }
     }
 
-    private fun runAsyncTaskTimer(
-        delay: Long,
-        period: Long,
-        task: BukkitRunnable.() -> Unit
-    ): BukkitTask {
-        return object : BukkitRunnable() {
+    private fun runAsyncTask(task: () -> Unit) {
+        object : BukkitRunnable() {
             override fun run() {
                 task()
             }
-        }.runTaskTimerAsynchronously(this, delay, period)
+        }.runTaskAsynchronously(this)
+    }
+
+    private fun runSyncTask(task: () -> Unit) {
+        object : BukkitRunnable() {
+            override fun run() {
+                task()
+            }
+        }.runTask(this)
     }
 }
