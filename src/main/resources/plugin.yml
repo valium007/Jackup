@@ -1,0 +1,6 @@
+name: Jackup
+version: '${version}'
+
+main: org.jackup.Jackup.jackup.Jackup
+api-version: '26.2'
+load: STARTUP

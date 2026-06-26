@@ -1,0 +1,17 @@
+# How often to run a backup, in seconds. (6 hours)
+backup-frequency: 21600
+
+# Maximum number of backups to keep. Oldest are deleted once this is exceeded.
+max-backups: 4
+
+# Zstandard compression level (1 = fastest, 22 = smallest). 10 is a good balance.
+compression-level: 10
+
+# Folder where backup archives are written (relative to the server directory).
+backup-path: backups
+
+# Worlds to back up. These are directory names relative to the server directory.
+worlds:
+  - world
+  - world_nether
+  - world_the_end
